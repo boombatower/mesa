@@ -33,6 +33,7 @@
  * Set GALLIUM_HUD=help for more info.
  */
 
+#include <signal.h>
 #include <stdio.h>
 
 #include "hud/hud_context.h"
@@ -51,8 +52,10 @@
 #include "tgsi/tgsi_text.h"
 #include "tgsi/tgsi_dump.h"
 
+static boolean __visible_toggle = false;
 
 struct hud_context {
+   boolean visible;
    struct pipe_context *pipe;
    struct cso_context *cso;
    struct u_upload_mgr *uploader;
@@ -95,6 +98,11 @@ struct hud_context {
    } text, bg, whitelines;
 };
 
+static void
+signal_visible_handler(int signo)
+{
+   __visible_toggle = true;
+}
 
 static void
 hud_draw_colored_prims(struct hud_context *hud, unsigned prim,
@@ -431,8 +439,15 @@ hud_alloc_vertices(struct hud_context *hud, struct vertex_queue *v,
 void
 hud_draw(struct hud_context *hud, struct pipe_resource *tex)
 {
+   if (__visible_toggle) {
+      hud->visible = !hud->visible;
+      __visible_toggle = false;
+   }
+   if (!hud->visible) return;
+
    struct cso_context *cso = hud->cso;
    struct pipe_context *pipe = hud->pipe;
+
    struct pipe_framebuffer_state fb;
    struct pipe_surface surf_templ, *surf;
    struct pipe_viewport_state viewport;
@@ -1124,7 +1139,9 @@ hud_create(struct pipe_context *pipe, struct cso_context *cso)
    struct hud_context *hud;
    struct pipe_sampler_view view_templ;
    unsigned i;
+   boolean visible = debug_get_bool_option("GALLIUM_HUD_VISIBLE", true);
    const char *env = debug_get_option("GALLIUM_HUD", NULL);
+   long signo = debug_get_num_option("GALLIUM_HUD_TOGGLE_SIGNAL", 0);
 
    if (!env || !*env)
       return NULL;
@@ -1138,6 +1155,7 @@ hud_create(struct pipe_context *pipe, struct cso_context *cso)
    if (!hud)
       return NULL;
 
+   hud->visible = visible;
    hud->pipe = pipe;
    hud->cso = cso;
    hud->uploader = u_upload_create(pipe, 256 * 1024, 16,
@@ -1266,6 +1284,11 @@ hud_create(struct pipe_context *pipe, struct cso_context *cso)
    hud->constbuf.user_buffer = &hud->constants;
 
    LIST_INITHEAD(&hud->pane_list);
+
+   if (signo < 1 || signo >= NSIG)
+      fprintf(stderr, "gallium_hud: invalid signal %ld\n", signo);
+   else if (signal(signo, signal_visible_handler) == SIG_ERR)
+      fprintf(stderr, "gallium_hud: unable to set handler for signal %ld\n", signo);
 
    hud_parse_env_var(hud, env);
    return hud;
